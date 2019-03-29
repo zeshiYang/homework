@@ -6,6 +6,12 @@ import numpy as np
 import random
 
 def huber_loss(x, delta=1.0):
+    '''
+    some times Bellman error can be large,so we will use huber loss to replace MSE loss
+    :param x:
+    :param delta:
+    :return:
+    '''
     # https://en.wikipedia.org/wiki/Huber_loss
     return tf.where(
         tf.abs(x) < delta,

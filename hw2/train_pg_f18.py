@@ -11,6 +11,7 @@ import os
 import time
 import inspect
 from multiprocessing import Process
+import torch
 
 #============================================================================================#
 # Utilities
@@ -19,7 +20,7 @@ from multiprocessing import Process
 #========================================================================================#
 #                           ----------PROBLEM 2----------
 #========================================================================================#  
-def build_mlp(input_placeholder, output_size, scope, n_layers, size, activation=tf.tanh, output_activation=None):
+def build_mlp(input, output_size, scope, n_layers, size, activation=tf.tanh, output_activation=None):
     """
         Builds a feedforward neural network
         
