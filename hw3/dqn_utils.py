@@ -181,7 +181,7 @@ class ReplayBuffer(object):
     def __init__(self, size, frame_history_len, lander=False):
         """This is a memory efficient implementation of the replay buffer.
 
-        The sepecific memory optimizations use here are:
+        The specific memory optimizations use here are:
             - only store each frame once rather than k times
               even if every observation normally consists of k last frames
             - store frames as np.uint8 (actually it is most time-performance

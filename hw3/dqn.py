@@ -10,6 +10,7 @@ import tensorflow                as tf
 import tensorflow.contrib.layers as layers
 from collections import namedtuple
 from dqn_utils import *
+from DQN_model import *
 
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
@@ -113,6 +114,13 @@ class QLearner(object):
         input_shape = (img_h, img_w, frame_history_len * img_c)
     self.num_actions = self.env.action_space.n
 
+    #Qnet and target Qnet
+    policy_net=DQN(input_shape,self.num_actions)
+    target_net=DQN(input_shape,self.num_actions)
+    target_net.load_state_dict(policy_net.state_dict())
+    #stop computing the gradient in the target Qnetwork
+    target_net.eval()
+
     # set up placeholders
     # placeholder for current observation (or state)
     self.obs_t_ph              = tf.placeholder(
@@ -162,18 +170,7 @@ class QLearner(object):
 
     ######
 
-    # construct optimization op (with gradient clipping)
-    self.learning_rate = tf.placeholder(tf.float32, (), name="learning_rate")
-    optimizer = self.optimizer_spec.constructor(learning_rate=self.learning_rate, **self.optimizer_spec.kwargs)
-    self.train_fn = minimize_and_clip(optimizer, self.total_error,
-                 var_list=q_func_vars, clip_val=grad_norm_clipping)
 
-    # update_target_fn will be called periodically to copy Q network to target Q network
-    update_target_fn = []
-    for var, var_target in zip(sorted(q_func_vars,        key=lambda v: v.name),
-                               sorted(target_q_func_vars, key=lambda v: v.name)):
-        update_target_fn.append(var_target.assign(var))
-    self.update_target_fn = tf.group(*update_target_fn)
 
     # construct the replay buffer
     self.replay_buffer = ReplayBuffer(replay_buffer_size, frame_history_len, lander=lander)

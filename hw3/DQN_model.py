@@ -59,7 +59,8 @@ def main():
     img=torch.Tensor(np.zeros((1,3,100,100)))
     q=dqn.forward(img)
     print(q)
-    print("finshed")
+    print(q.max(1))
+    print("finish test")
 
 
 if __name__=="__main__":
