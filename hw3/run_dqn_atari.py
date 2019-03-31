@@ -13,25 +13,7 @@ from dqn_utils import *
 from atari_wrappers import *
 
 
-def atari_model(img_in, num_actions, scope, reuse=False):
-    # as described in https://storage.googleapis.com/deepmind-data/assets/papers/DeepMindNature14236Paper.pdf
-    with tf.variable_scope(scope, reuse=reuse):
-        out = img_in
-        with tf.variable_scope("convnet"):
-            # original architecture
-            out = layers.convolution2d(out, num_outputs=32, kernel_size=8, stride=4, activation_fn=tf.nn.relu)
-            out = layers.convolution2d(out, num_outputs=64, kernel_size=4, stride=2, activation_fn=tf.nn.relu)
-            out = layers.convolution2d(out, num_outputs=64, kernel_size=3, stride=1, activation_fn=tf.nn.relu)
-        out = layers.flatten(out)
-        with tf.variable_scope("action_value"):
-            out = layers.fully_connected(out, num_outputs=512,         activation_fn=tf.nn.relu)
-            out = layers.fully_connected(out, num_outputs=num_actions, activation_fn=None)
-
-
-        return out
-
 def atari_learn(env,
-                session,
                 num_timesteps):
     # This is just a rough estimate
     num_iterations = float(num_timesteps) / 4.0
@@ -64,9 +46,6 @@ def atari_learn(env,
 
     dqn.learn(
         env=env,
-        q_func=atari_model,
-        optimizer_spec=optimizer,
-        session=session,
         exploration=exploration_schedule,
         stopping_criterion=stopping_criterion,
         replay_buffer_size=1000000,
@@ -76,8 +55,8 @@ def atari_learn(env,
         learning_freq=4,
         frame_history_len=4,
         target_update_freq=10000,
-        grad_norm_clipping=10,
-        double_q=True
+        grad_norm_clipping=1,
+        double_q=False
     )
     env.close()
 
@@ -125,8 +104,7 @@ def main():
     seed = random.randint(0, 9999)
     print('random seed = %d' % seed)
     env = get_env(task, seed)
-    session = get_session()
-    atari_learn(env, session, num_timesteps=2e8)
+    atari_learn(env, num_timesteps=2e8)
 
 if __name__ == "__main__":
     main()

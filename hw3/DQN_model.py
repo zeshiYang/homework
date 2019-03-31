@@ -1,5 +1,6 @@
 import torch.nn as nn
-
+import numpy as np
+import torch
 class DQN(nn.Module):
     '''
     pytorch CNN model for Atari games
@@ -7,7 +8,7 @@ class DQN(nn.Module):
     def __init__(self,img_shape,num_actions):
         super(DQN,self).__init__()
         self._conv=nn.Sequential(
-            nn.Conv2d(3,16,kernel_size=5,stride=2),
+            nn.Conv2d(4,16,kernel_size=5,stride=2),
             nn.BatchNorm2d(16),
             nn.Conv2d(16,32,kernel_size=5,stride=2),
             nn.BatchNorm2d(32),
@@ -25,6 +26,8 @@ class DQN(nn.Module):
             nn.ReLU(),
             nn.Linear(512,num_actions)
         )
+
+        self.num_actions=num_actions
 
 
     def _getConvSize(self,size,size_kernal,stride):
@@ -47,6 +50,22 @@ class DQN(nn.Module):
         x=x.view(x.size(0),-1)
         return self._linear(x)
 
+    def _selectAction(self,img_in,eps_threshold):
+        '''
+        select action according to Q values,
+        :param img_in:input images
+        :return:action selected
+        '''
+        sample=np.random.random()
+
+        if(sample>eps_threshold):
+            with torch.no_grad():
+                q_value = self.forward(img_in)
+            return q_value.max(1)[1].item()
+        else:
+            return np.random.randint(0,self.num_actions)
+
+
 
 def main():
     '''
@@ -56,10 +75,12 @@ def main():
     import torch
     import numpy as np
     dqn=DQN((100,100,3),4)
-    img=torch.Tensor(np.zeros((1,3,100,100)))
+    dqn.eval()
+    img=torch.Tensor(np.zeros((1,4,100,100)))
     q=dqn.forward(img)
     print(q)
     print(q.max(1))
+    print(dqn._selectAction(img,0.01))
     print("finish test")
 
 

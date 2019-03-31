@@ -3,14 +3,13 @@ import time
 import pickle
 import sys
 import gym.spaces
-import itertools
-import numpy as np
-import random
-import tensorflow                as tf
-import tensorflow.contrib.layers as layers
 from collections import namedtuple
 from dqn_utils import *
 from DQN_model import *
+import torch.optim as optim
+import torch
+import IPython
+from tensorboardX import SummaryWriter
 
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
@@ -19,9 +18,6 @@ class QLearner(object):
   def __init__(
     self,
     env,
-    q_func,
-    optimizer_spec,
-    session,
     exploration=LinearSchedule(1000000, 0.1),
     stopping_criterion=None,
     replay_buffer_size=1000000,
@@ -31,7 +27,7 @@ class QLearner(object):
     learning_freq=4,
     frame_history_len=4,
     target_update_freq=10000,
-    grad_norm_clipping=10,
+    grad_norm_clipping=1,
     rew_file=None,
     double_q=True,
     lander=False):
@@ -92,15 +88,15 @@ class QLearner(object):
     assert type(env.action_space)      == gym.spaces.Discrete
 
     self.target_update_freq = target_update_freq
-    self.optimizer_spec = optimizer_spec
     self.batch_size = batch_size
     self.learning_freq = learning_freq
     self.learning_starts = learning_starts
     self.stopping_criterion = stopping_criterion
     self.env = env
-    self.session = session
     self.exploration = exploration
     self.rew_file = str(uuid.uuid4()) + '.pkl' if rew_file is None else rew_file
+    self.gamma=gamma
+    self.writer=SummaryWriter()
 
     ###############
     # BUILD MODEL #
@@ -115,37 +111,23 @@ class QLearner(object):
     self.num_actions = self.env.action_space.n
 
     #Qnet and target Qnet
-    policy_net=DQN(input_shape,self.num_actions)
-    target_net=DQN(input_shape,self.num_actions)
-    target_net.load_state_dict(policy_net.state_dict())
-    #stop computing the gradient in the target Qnetwork
-    target_net.eval()
+    self.device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    self.policy_net=DQN(input_shape,self.num_actions).to(self.device)
+    self.target_net=DQN(input_shape,self.num_actions).to(self.device)
+    self.target_net.load_state_dict(self.policy_net.state_dict())
+    self.target_net.eval()
+
+    self.optimizer = optim.RMSprop(self.policy_net.parameters())
 
     # set up placeholders
     # placeholder for current observation (or state)
-    self.obs_t_ph              = tf.placeholder(
-        tf.float32 if lander else tf.uint8, [None] + list(input_shape))
-    # placeholder for current action
-    self.act_t_ph              = tf.placeholder(tf.int32,   [None])
-    # placeholder for current reward
-    self.rew_t_ph              = tf.placeholder(tf.float32, [None])
-    # placeholder for next observation (or state)
-    self.obs_tp1_ph            = tf.placeholder(
-        tf.float32 if lander else tf.uint8, [None] + list(input_shape))
     # placeholder for end of episode mask
     # this value is 1 if the next state corresponds to the end of an episode,
     # in which case there is no Q-value at the next state; at the end of an
     # episode, only the current state reward contributes to the target, not the
     # next state Q-value (i.e. target is just rew_t_ph, not rew_t_ph + gamma * q_tp1)
-    self.done_mask_ph          = tf.placeholder(tf.float32, [None])
 
     # casting to float on GPU ensures lower data transfer times.
-    if lander:
-      obs_t_float = self.obs_t_ph
-      obs_tp1_float = self.obs_tp1_ph
-    else:
-      obs_t_float   = tf.cast(self.obs_t_ph,   tf.float32) / 255.0
-      obs_tp1_float = tf.cast(self.obs_tp1_ph, tf.float32) / 255.0
 
     # Here, you should fill in your own code to compute the Bellman error. This requires
     # evaluating the current and next Q-values and constructing the corresponding error.
@@ -179,7 +161,7 @@ class QLearner(object):
     ###############
     # RUN ENV     #
     ###############
-    self.model_initialized = False
+    self.model_initialized = True
     self.num_param_updates = 0
     self.mean_episode_reward      = -float('nan')
     self.best_mean_episode_reward = -float('inf')
@@ -193,6 +175,8 @@ class QLearner(object):
     return self.stopping_criterion is not None and self.stopping_criterion(self.env, self.t)
 
   def step_env(self):
+    print("t:{}".format(self.t))
+    #print("start sampling")
     ### 2. Step the env and store the transition
     # At this point, "self.last_obs" contains the latest observation that was
     # recorded from the simulator. Here, your code needs to store this
@@ -222,6 +206,19 @@ class QLearner(object):
     # And remember that the first time you enter this loop, the model
     # may not yet have been initialized (but of course, the first step
     # might as well be random, since you haven't trained your net...)
+    idx=self.replay_buffer.store_frame(self.last_obs)
+    img_in=self.replay_buffer.encode_recent_observation()
+    img_in=img_in.transpose((2,0,1))
+    #normalize the input image
+    img_in=img_in/255.0
+    img_in=torch.Tensor(img_in).to(self.device).unsqueeze(0)
+    #print(img_in.size())
+    action=self.policy_net._selectAction(img_in,self.exploration.value(self.t))
+    obs, reward, done, info = self.env.step(action)
+    if(done==True):
+      obs=self.env.reset()
+    self.last_obs=obs
+    self.replay_buffer.store_effect(idx,action,reward,done)
 
     #####
 
@@ -235,6 +232,37 @@ class QLearner(object):
     if (self.t > self.learning_starts and \
         self.t % self.learning_freq == 0 and \
         self.replay_buffer.can_sample(self.batch_size)):
+      #print("update model")
+      obs_batch, act_batch, rew_batch, next_obs_batch, done_mask_batch=self.replay_buffer.sample(self.batch_size)
+      rew_batch=torch.from_numpy(rew_batch).to(self.device).float().unsqueeze(1)
+      obs_batch=obs_batch.transpose((0,3,1,2))/255.0
+      obs_batch=torch.from_numpy(obs_batch).to(self.device).float()
+      act_batch=torch.from_numpy(act_batch).to(self.device).long().unsqueeze(1)
+      next_obs_batch = next_obs_batch.transpose((0, 3, 1, 2)) / 255.0
+      next_obs_batch=torch.from_numpy(next_obs_batch).to(self.device).float()
+      done_mask_batch=torch.from_numpy(done_mask_batch).to(self.device).unsqueeze(1)
+
+
+
+      predicted_qvalues=self.policy_net(obs_batch).gather(1,act_batch)
+      next_state_qvalues=torch.mul(self.target_net(next_obs_batch).max(1)[0].detach().unsqueeze(1), done_mask_batch)
+      #IPython.embed()
+      true_qvalues=rew_batch+self.gamma*next_state_qvalues
+
+      loss=torch.nn.functional.smooth_l1_loss(predicted_qvalues,true_qvalues)
+
+      self.optimizer.zero_grad()
+      loss.backward()
+      self.writer.add_scalar("data/loss",loss.item(),self.t)
+      for para in self.policy_net.parameters():
+        para.grad.data.clamp(-1,1)
+      self.optimizer.step()
+
+      if(self.t%self.target_update_freq==0):
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+
+
       # Here, you should perform training. Training consists of four steps:
       # 3.a: use the replay buffer to sample a batch of transitions (see the
       # replay buffer code for function definition, each batch that you sample
@@ -286,12 +314,16 @@ class QLearner(object):
       self.best_mean_episode_reward = max(self.best_mean_episode_reward, self.mean_episode_reward)
 
     if self.t % self.log_every_n_steps == 0 and self.model_initialized:
+      self.writer.add_scalar('data/mean reward (100 episodes)',self.mean_episode_reward,self.t)
+      self.writer.add_scalar('data/best mean reward (100 episodes)', self.best_mean_episode_reward, self.t)
+      self.writer.add_scalar('data/episodes', len(episode_rewards), self.t)
+      self.writer.add_scalar('data/exploration', self.exploration.value(self.t), self.t)
       print("Timestep %d" % (self.t,))
       print("mean reward (100 episodes) %f" % self.mean_episode_reward)
       print("best mean reward %f" % self.best_mean_episode_reward)
       print("episodes %d" % len(episode_rewards))
       print("exploration %f" % self.exploration.value(self.t))
-      print("learning_rate %f" % self.optimizer_spec.lr_schedule.value(self.t))
+      #print("learning_rate %f" % self.optimizer_spec.lr_schedule.value(self.t))
       if self.start_time is not None:
         print("running time %f" % ((time.time() - self.start_time) / 60.))
 
