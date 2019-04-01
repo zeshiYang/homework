@@ -58,10 +58,8 @@ def atari_learn(env,
 
     dqn.learn(
         env,
-        q_func=atari_model,
-        optimizer_spec=optimizer,
-        session=session,
         exploration=exploration_schedule,
+        lr_schedule=lr_schedule,
         stopping_criterion=stopping_criterion,
         replay_buffer_size=1000000,
         batch_size=32,

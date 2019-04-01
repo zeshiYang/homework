@@ -44,8 +44,6 @@ def lander_exploration_schedule(num_timesteps):
 
 def lander_kwargs():
     return {
-        'optimizer_spec': lander_optimizer(),
-        'q_func': lander_model,
         'replay_buffer_size': 50000,
         'batch_size': 32,
         'gamma': 1.00,
@@ -67,9 +65,9 @@ def lander_learn(env,
     exploration_schedule = lander_exploration_schedule(num_timesteps)
 
     dqn.learn(
-        env=env,
-        session=session,
+        env,
         exploration=lander_exploration_schedule(num_timesteps),
+        lr_schedule=ConstantSchedule(1e-3),
         stopping_criterion=lander_stopping_criterion(num_timesteps),
         double_q=True,
         **lander_kwargs()

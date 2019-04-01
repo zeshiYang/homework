@@ -10,6 +10,8 @@ import torch.optim as optim
 import torch
 import IPython
 from tensorboardX import SummaryWriter
+from DQN_RAM import *
+from DQN_lander import *
 
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
@@ -18,6 +20,7 @@ class QLearner(object):
   def __init__(
     self,
     env,
+    lr_schedule,
     exploration=LinearSchedule(1000000, 0.1),
     stopping_criterion=None,
     replay_buffer_size=1000000,
@@ -97,6 +100,7 @@ class QLearner(object):
     self.rew_file = str(uuid.uuid4()) + '.pkl' if rew_file is None else rew_file
     self.gamma=gamma
     self.writer=SummaryWriter()
+    self.lr_schedule=lr_schedule
 
     ###############
     # BUILD MODEL #
@@ -109,15 +113,15 @@ class QLearner(object):
         img_h, img_w, img_c = self.env.observation_space.shape
         input_shape = (img_h, img_w, frame_history_len * img_c)
     self.num_actions = self.env.action_space.n
-
+    print(input_shape)
     #Qnet and target Qnet
     self.device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    self.policy_net=DQN(input_shape,self.num_actions).to(self.device)
-    self.target_net=DQN(input_shape,self.num_actions).to(self.device)
+    self.policy_net=DQN_lander(input_shape[0],self.num_actions).to(self.device)
+    self.target_net=DQN_lander(input_shape[0],self.num_actions).to(self.device)
     self.target_net.load_state_dict(self.policy_net.state_dict())
     self.target_net.eval()
 
-    self.optimizer = optim.RMSprop(self.policy_net.parameters())
+    self.optimizer = optim.Adam(self.policy_net.parameters(),lr=1e-4)
 
     # set up placeholders
     # placeholder for current observation (or state)
@@ -208,9 +212,10 @@ class QLearner(object):
     # might as well be random, since you haven't trained your net...)
     idx=self.replay_buffer.store_frame(self.last_obs)
     img_in=self.replay_buffer.encode_recent_observation()
-    img_in=img_in.transpose((2,0,1))
+    #img_in=img_in.transpose((2,0,1))
     #normalize the input image
-    img_in=img_in/255.0
+    #IPython.embed()
+    #img_in=img_in/255.0
     img_in=torch.Tensor(img_in).to(self.device).unsqueeze(0)
     #print(img_in.size())
     action=self.policy_net._selectAction(img_in,self.exploration.value(self.t))
@@ -235,27 +240,31 @@ class QLearner(object):
       #print("update model")
       obs_batch, act_batch, rew_batch, next_obs_batch, done_mask_batch=self.replay_buffer.sample(self.batch_size)
       rew_batch=torch.from_numpy(rew_batch).to(self.device).float().unsqueeze(1)
-      obs_batch=obs_batch.transpose((0,3,1,2))/255.0
+      #obs_batch=obs_batch.transpose((0,3,1,2))/255.0
       obs_batch=torch.from_numpy(obs_batch).to(self.device).float()
       act_batch=torch.from_numpy(act_batch).to(self.device).long().unsqueeze(1)
-      next_obs_batch = next_obs_batch.transpose((0, 3, 1, 2)) / 255.0
+      #next_obs_batch = next_obs_batch.transpose((0, 3, 1, 2)) / 255.0
       next_obs_batch=torch.from_numpy(next_obs_batch).to(self.device).float()
       done_mask_batch=torch.from_numpy(done_mask_batch).to(self.device).unsqueeze(1)
 
 
-
       predicted_qvalues=self.policy_net(obs_batch).gather(1,act_batch)
-      next_state_qvalues=torch.mul(self.target_net(next_obs_batch).max(1)[0].detach().unsqueeze(1), done_mask_batch)
+      next_state_qvalues=torch.mul(self.target_net(next_obs_batch).max(1)[0].detach().unsqueeze(1), 1-done_mask_batch)
       #IPython.embed()
       true_qvalues=rew_batch+self.gamma*next_state_qvalues
 
       loss=torch.nn.functional.smooth_l1_loss(predicted_qvalues,true_qvalues)
 
+      adjust_learning_rate(self.optimizer, self.lr_schedule.value(self.t))
+
+
       self.optimizer.zero_grad()
       loss.backward()
       self.writer.add_scalar("data/loss",loss.item(),self.t)
+      self.writer.add_scalar("data/lr",self.lr_schedule.value(self.t) , self.t)
+      self.writer.add_scalar("data/num_in_buffer", self.replay_buffer.num_in_buffer, self.t)
       for para in self.policy_net.parameters():
-        para.grad.data.clamp(-1,1)
+        para.grad.data.clamp(-10,10)
       self.optimizer.step()
 
       if(self.t%self.target_update_freq==0):

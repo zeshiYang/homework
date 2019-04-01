@@ -5,6 +5,13 @@ import tensorflow as tf
 import numpy as np
 import random
 
+
+def adjust_learning_rate(optimizer, lr):
+    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+
 def huber_loss(x, delta=1.0):
     '''
     some times Bellman error can be large,so we will use huber loss to replace MSE loss
@@ -220,6 +227,7 @@ class ReplayBuffer(object):
     def can_sample(self, batch_size):
         """Returns true if `batch_size` different transitions can be sampled from the buffer."""
         return batch_size + 1 <= self.num_in_buffer
+
 
     def _encode_sample(self, idxes):
         obs_batch      = np.concatenate([self._encode_observation(idx)[None] for idx in idxes], 0)
